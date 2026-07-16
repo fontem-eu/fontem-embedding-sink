@@ -24,7 +24,15 @@ class LinguisticsClient:
     _client: httpx.Client | None = None
 
     def __enter__(self) -> "LinguisticsClient":
-        self._client = httpx.Client(timeout=self.timeout)
+        # No keep-alive: k8s Service round-robins per new TCP connection,
+        # not per request. A pooled connection pins us to one endpoint
+        # for the pool's lifetime and starves the other replica; disable
+        # keep-alive so every embed_batch call re-resolves + re-hashes
+        # onto whichever pod kube-proxy picks that instant.
+        self._client = httpx.Client(
+            timeout=self.timeout,
+            limits=httpx.Limits(max_keepalive_connections=0),
+        )
         return self
 
     def __exit__(self, *_exc: Any) -> None:

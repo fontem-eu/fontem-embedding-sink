@@ -5,7 +5,7 @@
 CREATE SCHEMA IF NOT EXISTS search;
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Vectors are 768-dim (LaBSE). The `encoder_id` is stamped by
+-- Vectors are 1024-dim (Mistral-embed). The `encoder_id` is stamped by
 -- fontem-linguistics on every /embed response — reject cross-version
 -- comparisons at query time (see linguistics/backends/labse_local.py
 -- for the versioning convention e.g. "labse@1.0.0-836121a").
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS search.entity_embeddings (
   entity_id     text        NOT NULL,        -- the gmr_id / authority_id / etc.
   encoder_id    text        NOT NULL,        -- e.g. "labse@1.0.0-836121a"
   embed_text    text        NOT NULL,        -- what was actually embedded (audit)
-  embedding     vector(768) NOT NULL,        -- LaBSE vector
+  embedding     vector(1024) NOT NULL,        -- Mistral-embed vector
   name_lex      tsvector    NOT NULL,        -- for hybrid lexical (per-row simple config; per-lang analyzers come later)
   country       text,                        -- pulled from payload when present, for filters
   event_date    date,                        -- publication_date / filed_date / etc., for date filters

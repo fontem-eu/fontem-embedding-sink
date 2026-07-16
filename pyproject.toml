@@ -19,3 +19,6 @@ exclude = ["tests*", "vendor*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-cov"]

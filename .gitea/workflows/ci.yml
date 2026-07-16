@@ -27,7 +27,7 @@ jobs:
       - name: pytest
         run: pytest -v
       - name: Lint
-        run: pylint neo4j_sink tests
+        run: pylint embedding_sink tests
 
   security:
     runs-on: ubuntu-latest

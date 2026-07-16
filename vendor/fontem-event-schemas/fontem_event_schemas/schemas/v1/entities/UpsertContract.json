@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.fontem.eu/v1/entities/UpsertContract.json",
+  "title": "UpsertContract",
+  "description": "A public procurement contract — primarily TED (EU Tenders Electronic Daily) award notices. Linked to its contracting Authority via authority_id and to the awarded Company (vendor) via company_gmr_id. Sinks materialise AWARDED (Authority→Contract) and AWARDED_TO (Contract→Company) edges from those keys.",
+  "type": "object",
+  "required": [
+    "ted_notice_id"
+  ],
+  "properties": {
+    "ted_notice_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "TED notice ID (or other procurement source notice ID). For eForms-format notices this is the cbc:ID root identifier — a UUID assigned by the publishing system before TED has materialised a publication-number."
+    },
+    "ted_publication_number": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "TED publication-number assigned at publish time (e.g. '295342-2026'). The ETL resolves this via TED's v3 search API so downstream readers can build the canonical detail URL (https://ted.europa.eu/en/notice/-/detail/<publication-number>) directly. Null when the notice is queued but not yet published, or when the search API had no match at ETL time — readers fall back to the runtime lookup endpoint in that case."
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "authority_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Contracting authority's authority_id."
+    },
+    "company_gmr_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "Awarded company's gmr_id."
+    },
+    "publication_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "value_eur": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Awarded contract value in EUR (converted at publication date). This is the value the loader chose to trust — the eForms NoticeResult TotalAmount, falling back to the per-award PayableAmount — not necessarily either raw field verbatim."
+    },
+    "value_currency": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Original ISO 4217 currency before EUR conversion."
+    },
+    "value_original": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Chosen awarded value in the original currency."
+    },
+    "value_before_eur": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "On a modification (can-modif), the pre-modification contract total in EUR, converted at the same publication-date rate as value_eur so the before->after delta isolates the value change from FX drift. Populated from legacy TED F20 notices, which self-contain both totals; eForms modifications carry the before via the MODIFIES link to the original."
+    },
+    "value_before_original": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "The pre-modification total (VAL_TOTAL_BEFORE) in the original currency; paired with value_original (the after total)."
+    },
+    "estimated_value_eur": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "The lot/notice EstimatedOverallContractAmount in EUR — the independently-entered budget estimate, kept as the primary cross-check for the value confidence score."
+    },
+    "value_payable_eur": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "The per-award PayableAmount in EUR — kept as a secondary cross-check. Frequently equals value_eur, but diverges when the source corrupts one field (see value_payable_discrepancy)."
+    },
+    "value_confidence": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence in value_eur, in [0,1]: consistency (agreement of the chosen value with the estimate and payable) × plausibility (soft absolute magnitude bound). Derived by contract_confidence.score_contract_value."
+    },
+    "value_confidence_consistency": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Consistency sub-score: weighted log-space agreement of the chosen value with the estimate (full weight) and payable (down-weighted)."
+    },
+    "value_confidence_plausibility": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Plausibility sub-score: soft absolute EUR magnitude bound (1.0 up to ~1B, decaying to 0 by ~300B)."
+    },
+    "value_quality_flag": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "ok",
+        "no_awarded_value",
+        "zero_value",
+        "concession_negative",
+        "value_disagreement",
+        "implausible_magnitude",
+        "unverified_single_signal",
+        null
+      ],
+      "description": "Why the value is (or is not) trustworthy."
+    },
+    "value_low_confidence": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "True when value_confidence is below the platform threshold (0.5). Consumers exclude such contracts from default value aggregates while keeping the record available."
+    },
+    "value_payable_discrepancy": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "True when the source PayableAmount disagrees with the stored value by more than ~5x — an internal source inconsistency, surfaced even when the contract is otherwise kept (e.g. the Forca Aerea aircraft, total EUR 7.27M but payable EUR 7.27B)."
+    },
+    "value_quarantined": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "True when the platform withheld the monetary fields because the published value failed hard sanity checks (see value_quarantine_reason). The claimed value survives in the event log and the review queue; sinks REMOVE any previously rendered monetary props."
+    },
+    "match_tier": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "How company_gmr_id was resolved: lei | vat | cik (exact ID) vs name_country | fuzzy (name-based). Stamped on the AWARDED_TO edge so exact and inferred attributions are distinguishable in queries + UI."
+    },
+    "match_confidence": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Resolver confidence for the company match (1.0 lei, 0.99 vat/cik, 0.95 name_country, <0.95 fuzzy)."
+    },
+    "match_layer": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "TedMatcher layer that produced the match (1 vat-cache, 2 resolve hard/name, 3 resolve fuzzy, 5 new node)."
+    },
+    "value_quarantine_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Why the value was withheld: implausible_magnitude | concession_negative | unverified_single_signal (review-queued) or zero_value (auto: a published 0 is non-disclosure)."
+    },
+    "cpv": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Primary CPV code."
+    },
+    "nuts": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Place-of-performance NUTS code."
+    },
+    "language": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Notice language code."
+    },
+    "country": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "ISO 3166-1 alpha-3 country code of the contracting authority (the acquirer). Cascaded onto the Contract at write time because TED contracts are jurisdictionally grouped by the procuring entity, not the awarded vendor."
+    },
+    "procedure_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "eForms procurement-procedure-type code (e.g. open, restricted, neg-w-call, neg-wo-call). Drives the non-open / no-call-for-bids red flags."
+    },
+    "procedure_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "eForms procedure-identifier (UUID). Shared by an award notice and its contract-modification (can-modif) notices; link_ted_modifications joins on it to build MODIFIES edges. Stamped by the TED incremental search-API loader."
+    },
+    "notice_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "eForms notice-type (e.g. can-standard, can-modif). 'can-modif' marks a contract-modification notice."
+    },
+    "modifies_publication_number": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "On a modification (can-modif), the original award's publication-number (or notice identifier) it modifies. Provenance for the MODIFIES link; the join itself uses procedure_id."
+    },
+    "tenders_received": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Number of tenders received for the award's lot. A value of 1 is the single-bidder red flag (the headline EC Single Market Scoreboard indicator)."
+    },
+    "award_criterion_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "price",
+        "meat",
+        null
+      ],
+      "description": "price = lowest-price-only award; meat = most-economically-advantageous-tender (any quality/cost criterion). Price-only is a CRI red flag."
+    },
+    "submission_deadline": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date",
+      "description": "Tender submission cut-off date — with publication_date, yields the submission-period / decision-speed indicators."
+    },
+    "is_framework": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "True when the notice sets up a framework agreement (excluded from some single-bidder denominators)."
+    },
+    "eu_funded": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "True when the notice declares EU co-financing (cohesion / RRF etc.). Null when no funding block is present (unknown, not 'definitely not')."
+    },
+    "funding_programme": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Declared EU funding programme code when eu_funded."
+    },
+    "current_value": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Collapsed value of the underlying contract in EUR: the latest restated value across the original award and its contract-modification (can-modif) notices, or the award value when never modified. Materialised by the collapse_modifications ETL pass. Value aggregates sum this over is_current nodes so each contract counts once."
+    },
+    "is_current": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "True on the single canonical :Contract node per underlying contract (the award, or the latest modification when the award was never ingested). Value/count aggregates include is_current nodes only; superseded modification restatements are false. Absent on never-modified nodes, which readers default to canonical."
+    },
+    "contract_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Stable identity the collapse_modifications pass grouped a contract's award + modification notices under (procedure_id, else the modified/own publication reference)."
+    }
+  },
+  "additionalProperties": false
+}

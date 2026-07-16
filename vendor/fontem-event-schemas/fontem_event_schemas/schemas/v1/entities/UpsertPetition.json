@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UpsertPetition",
+  "description": "A public petition from an official register (ECI, parliament platforms). Organizer names come from the upstream public register (Art 6(1)(e)); emails are never carried. Milestone dates are flattened for chart/query ergonomics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "system",
+    "petition_id"
+  ],
+  "properties": {
+    "system": {
+      "type": "string",
+      "description": "Source register, e.g. eu-eci"
+    },
+    "petition_id": {
+      "type": "string",
+      "description": "Register id, e.g. ECI(2024)000007"
+    },
+    "title": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "objectives": {
+      "type": "string",
+      "description": "Short description/objectives excerpt"
+    },
+    "registration_date": {
+      "type": "string"
+    },
+    "collection_start_date": {
+      "type": "string"
+    },
+    "collection_deadline": {
+      "type": "string"
+    },
+    "closed_date": {
+      "type": "string"
+    },
+    "submitted_date": {
+      "type": "string"
+    },
+    "answered_date": {
+      "type": "string"
+    },
+    "total_supporters": {
+      "type": "integer"
+    },
+    "support_link": {
+      "type": "string"
+    },
+    "organizer_names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "organizer_roles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "organizer_countries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "funding_total_eur": {
+      "type": "number"
+    },
+    "funding_sponsor_count": {
+      "type": "integer"
+    },
+    "registration_decision_celex": {
+      "type": "string"
+    },
+    "answer_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Raw answer document refs, e.g. C(2026)4110"
+    },
+    "latest_update": {
+      "type": "string"
+    }
+  }
+}

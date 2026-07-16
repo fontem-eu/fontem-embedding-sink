@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.fontem.eu/v1/entities/UpsertInvestmentFund.json",
+  "title": "UpsertInvestmentFund",
+  "description": "A pooled investment vehicle (open/closed-end fund, ETP, unit trust, SICAV, fund-of-funds). Deliberately distinct from UpsertCompany: funds are major economic actors but not operating companies — GLEIF categorises them separately (entity.category=FUND) and OpenFIGI marks their units securityType2='Mutual Fund'. gmr_id uses the same canonical derivation as companies (UUID5 from LEI or other hard id), so an entity that first entered the graph as a Company keeps its identity; sinks relabel the node :InvestmentFund. Fund unit listings hang off via UpsertListing with company_gmr_id = the fund's gmr_id.",
+  "type": "object",
+  "required": ["gmr_id"],
+  "properties": {
+    "gmr_id":  { "type": "string", "format": "uuid" },
+    "name":    { "type": ["string", "null"] },
+    "country": { "type": ["string", "null"], "description": "ISO 3166-1 alpha-2." },
+    "lei":     { "type": ["string", "null"], "minLength": 20, "maxLength": 20 },
+    "active":  { "type": ["boolean", "null"] },
+    "legal_form": { "type": ["string", "null"] },
+    "fund_type":  { "type": ["string", "null"], "description": "Granular vehicle type when known — OpenFIGI securityType of its units ('Open-End Fund', 'Closed-End Fund', 'ETP', 'Fund of Funds', ...) or a GLEIF-derived category later." }
+  },
+  "additionalProperties": false
+}

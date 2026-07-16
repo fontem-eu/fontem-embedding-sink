@@ -41,3 +41,19 @@ class LinguisticsClient:
         )
         r.raise_for_status()
         return r.json()
+
+    def embed_batch(self, texts: list[str]) -> list[dict]:
+        """POST /embed_batch — returns list of {vector, dim, encoder_id, cached}.
+        Preserves order. Falls back to per-text /embed on 404 so the
+        client can transparently target older linguistics deployments."""
+        assert self._client is not None, "use as a context manager"
+        r = self._client.post(
+            f"{self.base_url.rstrip('/')}/embed_batch",
+            json={"texts": [t[:8000] for t in texts], "backend": self.backend},
+        )
+        if r.status_code == 404:
+            return [self.embed(t) for t in texts]
+        r.raise_for_status()
+        body = r.json()
+        return body["results"]
+

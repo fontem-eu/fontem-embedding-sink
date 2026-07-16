@@ -30,7 +30,7 @@ def hybrid(
     sql = open(os.path.join(os.path.dirname(__file__), "hybrid.sql")).read()
     t0 = time.perf_counter()
     with conn.cursor() as cur:
-        cur.execute(sql, (query, _vec_literal(qvec), encoder_id, country, types, limit))
+        cur.execute(sql, {"q": query, "qvec": _vec_literal(qvec), "enc": encoder_id, "country": country, "types": types, "limit": limit})
         cols = [d.name for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     return rows, (time.perf_counter() - t0) * 1000

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import psycopg
@@ -70,21 +71,42 @@ class EmbeddingSink(EventConsumer):
                 entity_type, entity_id, embed_text, country, event_date = shaped
                 work.append((ev, entity_type, entity_id, embed_text, country, event_date))
 
-            # Pass 2: batched embed in chunks. Any error in a chunk is
-            # re-raised for the normal EventConsumer retry/DLQ path.
-            embed_results: list[dict] = []
-            for chunk_start in range(0, len(work), batch_size):
-                chunk = work[chunk_start:chunk_start + batch_size]
-                try:
-                    part = ling.embed_batch([w[3] for w in chunk])
-                except Exception:
-                    ev = chunk[0][0]
-                    logger.exception(
-                        "linguistics /embed_batch failed near seq=%s (chunk_start=%d, chunk_size=%d)",
-                        ev.seq, chunk_start, len(chunk),
-                    )
-                    raise
-                embed_results.extend(part)
+            # Pass 2: batched embed. Chunks sized by EMBED_BATCH_SIZE and
+            # dispatched in parallel through a small ThreadPoolExecutor
+            # so a single ling pod's spare cores are actually used.
+            # Concurrency defaults to 4: linguistics is BLAS-bound per
+            # batch, so a handful of concurrent chunks saturates one pod
+            # without over-queuing.
+            chunk_workers = int(os.environ.get("EMBED_BATCH_CONCURRENCY", "4"))
+            chunks = [work[i:i + batch_size] for i in range(0, len(work), batch_size)]
+            embed_results: list[dict] = [None] * len(work)  # type: ignore[list-item]
+            first_exc: BaseException | None = None
+            failed_chunk_idx: int | None = None
+            if chunks:
+                with ThreadPoolExecutor(max_workers=chunk_workers) as pool:
+                    fut_meta = {
+                        pool.submit(ling.embed_batch, [w[3] for w in chunk]): (ci, chunk)
+                        for ci, chunk in enumerate(chunks)
+                    }
+                    for fut in as_completed(fut_meta):
+                        ci, chunk = fut_meta[fut]
+                        try:
+                            part = fut.result()
+                        except Exception as exc:  # noqa: BLE001
+                            if first_exc is None:
+                                first_exc = exc
+                                failed_chunk_idx = ci
+                            continue
+                        base = ci * batch_size
+                        for j, r in enumerate(part):
+                            embed_results[base + j] = r
+            if first_exc is not None:
+                first_ev = chunks[failed_chunk_idx][0][0]
+                logger.exception(
+                    "linguistics /embed_batch failed near seq=%s (chunk_idx=%d)",
+                    first_ev.seq, failed_chunk_idx,
+                )
+                raise first_exc
 
             for i, w in enumerate(work):
                 _, entity_type, entity_id, embed_text, country, event_date = w

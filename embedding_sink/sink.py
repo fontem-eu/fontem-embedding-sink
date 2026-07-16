@@ -39,8 +39,8 @@ class EmbeddingSink(EventConsumer):
             or os.environ["EVENTS_DATABASE_URL"]
         self._linguistics_url = os.environ["LINGUISTICS_URL"]
         # Backend is configurable so we can flip to mistral for a re-embed
-        # pass without a redeploy. Default is labse_local (free, multilingual).
-        self._backend = os.environ.get("EMBEDDING_BACKEND", "labse_local")
+        # pass without a redeploy. Default is labse-local (free, multilingual).
+        self._backend = os.environ.get("EMBEDDING_BACKEND", "labse-local")
         # Cache the encoder_id across a run so a mid-batch model roll is
         # visible in the logs (a change here means every subsequent row
         # in this run got a different encoder — start a re-embed job).

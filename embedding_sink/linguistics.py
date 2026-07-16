@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LinguisticsClient:
     base_url: str
-    backend: str = "labse_local"  # cheap, multilingual, no per-call cost
+    backend: str = "labse-local"  # cheap, multilingual, no per-call cost
     timeout: float = 30.0         # LaBSE first-warm can take 5-10s
     _client: httpx.Client | None = None
 

@@ -11,6 +11,7 @@ from embedding_sink.embed_text import (
 
 
 def test_company_composes_name_aliases_city_country():
+    """Name, aliases and city/country/legal_form context all land in the text."""
     row = company({
         "gmr_id": "abc-123",
         "name": "Siemens AG",
@@ -31,6 +32,7 @@ def test_company_composes_name_aliases_city_country():
 
 
 def test_company_skips_when_name_missing():
+    """None / empty / whitespace-only names compose to None (event skipped)."""
     assert company({"gmr_id": "x", "name": None}) is None
     assert company({"gmr_id": "x", "name": ""}) is None
     assert company({"gmr_id": "x", "name": "  "}) is None
@@ -52,6 +54,7 @@ def test_composer_skips_sentinel_placeholders():
 
 
 def test_authority_composer():
+    """UpsertAuthority composes name + context into an authority row."""
     row = authority({
         "authority_id": "auth-1", "name": "Bundeskanzleramt",
         "city": "Berlin", "country": "DE", "authority_type": "national",
@@ -62,6 +65,7 @@ def test_authority_composer():
 
 
 def test_contract_uses_title_and_publication_date():
+    """UpsertContract keys on title and carries publication_date."""
     row = contract({
         "ted_notice_id": "n1", "title": "Cleaning services for HQ",
         "country": "PT", "publication_date": "2026-05-01",
@@ -88,6 +92,7 @@ def test_disclosure_maps_system_to_entity_type():
 
 
 def test_sanctioned_entity_composer():
+    """Aliases, nationality and designation_date survive into the row."""
     row = sanctioned_entity({
         "entity_id": "s1", "name": "Sanctioned Corp",
         "aliases": ["SC", "SanCorp"], "subject_type": "company",
@@ -101,6 +106,7 @@ def test_sanctioned_entity_composer():
 
 
 def test_petition_composer():
+    """Title plus at most three objectives make up the petition text."""
     row = petition({
         "petition_id": "p1", "title": "Ban PFAS",
         "objectives": ["obj a", "obj b", "obj c", "obj d skipped"],
@@ -113,6 +119,7 @@ def test_petition_composer():
 
 
 def test_investment_fund_composer():
+    """UpsertInvestmentFund composes into a fund row."""
     row = investment_fund({
         "gmr_id": "f1", "name": "Test Fund", "country": "LU",
         "fund_type": "UCITS",

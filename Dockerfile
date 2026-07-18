@@ -1,6 +1,6 @@
 # fontem-embedding-sink — thin FastAPI-less consumer.
 # Uses the shared void42 ci-python image (Nexus-proxied pip, curl, ca).
-FROM contribute.void42.internal/void42/ci-python:latest
+FROM gitea-http.dev-tools.svc.cluster.local:3000/void42/ci-python:latest
 
 WORKDIR /app
 

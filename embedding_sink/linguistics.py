@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LinguisticsClient:
+    """Thin blocking client for fontem-linguistics /embed endpoints."""
+
     base_url: str
     backend: str = "labse-local"  # cheap, multilingual, no per-call cost
     timeout: float = 30.0         # LaBSE first-warm can take 5-10s
@@ -64,4 +66,3 @@ class LinguisticsClient:
         r.raise_for_status()
         body = r.json()
         return body["results"]
-

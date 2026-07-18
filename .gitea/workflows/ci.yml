@@ -67,7 +67,7 @@ jobs:
           done
           pip install --no-cache-dir -e '.[test]'
           pip install --no-cache-dir pylint pytest-cov
-          pytest --cov=neo4j_sink --cov-report=xml:coverage.xml || true
+          pytest --cov=embedding_sink --cov-report=xml:coverage.xml || true
       - uses: ./.fontem-ci/actions/sonar-scan
         with:
           sonar-token: ${{ secrets.SONAR_TOKEN }}
@@ -89,7 +89,7 @@ jobs:
         uses: ./.fontem-ci/actions/sbom-generate
         with:
           language: python
-          project-name: fontem-neo4j-sink
+          project-name: fontem-embedding-sink
           project-version: ${{ github.sha }}
           dtrack-key: ${{ secrets.DTRACK_API_KEY }}
 
@@ -97,7 +97,7 @@ jobs:
         name: Build, push, sign, attest
         uses: ./.fontem-ci/actions/docker-build-sign
         with:
-          image: contribute.void42.internal/fontem/fontem-neo4j-sink
+          image: contribute.void42.internal/fontem/fontem-embedding-sink
           cosign-key: ${{ secrets.COSIGN_KEY }}
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
@@ -124,11 +124,11 @@ jobs:
           cd /tmp/gitops
           # Only auto-bump non-prod (testing/staging share infra/staging.yaml).
           # Prod stays manual; the user bumps infra/prod.yaml when ready.
-          sed -i -E "s|(image: contribute\.void42\.internal/fontem/fontem-neo4j-sink:)[^\"[:space:]]+|\1${TAG}|" \
+          sed -i -E "s|(image: contribute\.void42\.internal/fontem/fontem-embedding-sink:)[^\"[:space:]]+|\1${TAG}|" \
             infra/staging.yaml || true
           git config user.name "Fontem CI"
           git config user.email "ci@void42.internal"
           git add infra/staging.yaml
           git diff --cached --quiet && { echo "No-op bump (already at $TAG)"; exit 0; }
-          git commit -m "ci: deploy fontem-neo4j-sink ${TAG} to testing+staging [skip ci]"
+          git commit -m "ci: deploy fontem-embedding-sink ${TAG} to testing+staging [skip ci]"
           git push origin main

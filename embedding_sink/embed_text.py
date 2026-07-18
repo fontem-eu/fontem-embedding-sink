@@ -45,6 +45,7 @@ def company(p: dict) -> Optional[Row]:
 
 
 def authority(p: dict) -> Optional[Row]:
+    """UpsertAuthority → name + (city, country, authority_type) context."""
     name = (p.get("name") or "").strip()
     if not name:
         return None
@@ -90,6 +91,7 @@ def disclosure(p: dict) -> Optional[Row]:
 
 
 def sanctioned_entity(p: dict) -> Optional[Row]:
+    """UpsertSanctionedEntity → name, aliases, subject_type, regime."""
     name = (p.get("name") or "").strip()
     if not name:
         return None
@@ -104,6 +106,7 @@ def sanctioned_entity(p: dict) -> Optional[Row]:
 
 
 def petition(p: dict) -> Optional[Row]:
+    """UpsertPetition → title + first three objectives."""
     title = (p.get("title") or "").strip()
     if not title:
         return None
@@ -118,6 +121,7 @@ def petition(p: dict) -> Optional[Row]:
 
 
 def investment_fund(p: dict) -> Optional[Row]:
+    """UpsertInvestmentFund → name + (country, fund_type) context."""
     name = (p.get("name") or "").strip()
     if not name:
         return None

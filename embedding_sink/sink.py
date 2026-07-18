@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingSink(EventConsumer):
+    """Event consumer that embeds Upsert* events into search.entity_embeddings."""
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._search_dsn = os.environ.get("SEARCH_DATABASE_URL") \
@@ -48,6 +50,8 @@ class EmbeddingSink(EventConsumer):
         self._encoder_id_seen: set[str] = set()
 
     def handle(self, batch: list[EventEnvelope]) -> None:
+        # One long, linear batch pipeline — kept inline on purpose.
+        # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         rows: list[tuple] = []
         skipped = 0
         # linguistics /embed_batch does BLAS-parallel model.encode() over
@@ -92,7 +96,7 @@ class EmbeddingSink(EventConsumer):
                         ci, chunk = fut_meta[fut]
                         try:
                             part = fut.result()
-                        except Exception as exc:  # noqa: BLE001
+                        except Exception as exc:  # noqa: BLE001  pylint: disable=broad-exception-caught
                             if first_exc is None:
                                 first_exc = exc
                                 failed_chunk_idx = ci

@@ -144,7 +144,8 @@ def test_handle_writes_rows_with_encoder_id_and_counts_skips(sink, caplog):
         assert row[2] == ENCODER                      # encoder_id column
         assert row[4] == "[0.100000,0.200000]"        # vector literal
     assert by_id[("contract", "n-1")][7] == "2026-05-01"  # event_date
-    assert by_id[("company", "c-1")][11] == 10            # last_seq (col-8 = nuts, col-9 = sector, col-10 = meta)
+    # cols [8..10] = nuts, sector, meta; last_seq moved to [11]
+    assert by_id[("company", "c-1")][11] == 10
 
     # Skips are counted and logged.
     assert "2 embedded, 2 skipped" in caplog.text

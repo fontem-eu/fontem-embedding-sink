@@ -157,6 +157,7 @@ def test_contract_projects_nuts_sector_and_value_tier_meta():
 
 
 def test_authority_projects_nuts_and_authority_type_as_sector():
+    """UpsertAuthority: nuts direct + authority_type as sector; meta carries url/national_id."""
     row = authority({
         "authority_id": "AUTH-9", "name": "Ministry of Defence",
         "country": "IE", "nuts": "IE04", "authority_type": "ministry",

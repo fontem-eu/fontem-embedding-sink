@@ -62,7 +62,8 @@ class EmbeddingSink(EventConsumer):
 
         with LinguisticsClient(self._linguistics_url, backend=self._backend) as ling:
             # Pass 1: shape everything cheaply; keep skipped events out.
-            work: list[tuple] = []  # (ev, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta)
+            # (ev, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta)
+            work: list[tuple] = []
             for ev in batch:
                 composer = COMPOSERS.get(ev.event_type)
                 if composer is None:
@@ -73,7 +74,10 @@ class EmbeddingSink(EventConsumer):
                     skipped += 1
                     continue
                 entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = shaped
-                work.append((ev, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta))
+                work.append((
+                    ev, entity_type, entity_id, embed_text, country, event_date,
+                    nuts, sector, meta,
+                ))
 
             # Pass 2: batched embed. Chunks sized by EMBED_BATCH_SIZE and
             # dispatched in parallel through a small ThreadPoolExecutor

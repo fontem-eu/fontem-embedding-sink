@@ -21,7 +21,7 @@ def test_company_composes_name_aliases_city_country():
         "legal_form": "AG",
     })
     assert row is not None
-    entity_type, entity_id, text, country, date = row
+    entity_type, entity_id, text, country, date, *_ = row
     assert entity_type == "company"
     assert entity_id == "abc-123"
     assert "Siemens AG" in text
@@ -46,7 +46,7 @@ def test_composer_skips_sentinel_placeholders():
         "gmr_id": "x", "name": "Real Name",
         "city": "nan", "country": "None", "legal_form": "-",
     })
-    _, _, text, country, _ = row
+    _, _, text, country, *_ = row
     assert "nan" not in text.lower()
     assert "none" not in text.lower()
     assert text == "Real Name"
@@ -134,3 +134,90 @@ def test_composers_index_matches_module_functions():
     for event_type, fn in COMPOSERS.items():
         assert callable(fn), f"{event_type} composer is not callable"
         assert event_type.startswith("Upsert")
+
+
+# ---------- advanced-filter fields (nuts, sector, meta jsonb) ----------
+
+def test_contract_projects_nuts_sector_and_value_tier_meta():
+    """Contract composer pulls NUTS + CPV-top-2 as sector + value_tier
+    into meta. Filter surface for the advanced-search panel."""
+    row = contract({
+        "ted_notice_id": "TED-1", "title": "Cleaning services HQ",
+        "country": "PT", "nuts": "PT18",
+        "cpv": "90910000", "value_eur": 350_000,
+        "authority_id": "AUTH-42", "publication_date": "2026-05-01",
+    })
+    assert row is not None
+    # positional: (type, id, text, country, event_date, nuts, sector, meta)
+    assert row[5] == "PT18"
+    assert row[6] == "90"                # CPV top-2 = "sewage/refuse services"
+    assert row[7]["value_tier"] == "M"   # 100k-1M
+    assert row[7]["value_eur"] == 350_000
+    assert row[7]["authority_id"] == "AUTH-42"
+
+
+def test_authority_projects_nuts_and_authority_type_as_sector():
+    row = authority({
+        "authority_id": "AUTH-9", "name": "Ministry of Defence",
+        "country": "IE", "nuts": "IE04", "authority_type": "ministry",
+        "national_id": "9999", "url": "https://gov.ie/def", "city": "Dublin",
+    })
+    assert row is not None
+    assert row[5] == "IE04"
+    assert row[6] == "ministry"
+    assert row[7]["national_id"] == "9999"
+    assert row[7]["url"] == "https://gov.ie/def"
+
+
+def test_disclosure_cohesion_pulls_nuts_from_details():
+    """eu_cohesion projects put NUTS + theme in payload.details."""
+    row = disclosure({
+        "system": "eu_cohesion", "disclosure_id": "COH-1",
+        "title": "Rail electrification NUTS PT16",
+        "filed_date": "2026-05-01",
+        "details": {"nuts": "PT16", "theme_code": "TO7", "country": "PT"},
+    })
+    assert row is not None
+    assert row[0] == "cohesion"
+    assert row[3] == "PT"    # country pulled from details
+    assert row[5] == "PT16"
+    assert row[6] == "TO7"
+
+
+def test_company_leaves_nuts_none_but_populates_meta():
+    """Companies don't ship a NUTS field yet; ensure it stays None
+    and doesn't accidentally get filled from unrelated fields."""
+    row = company({
+        "gmr_id": "abc", "name": "Siemens AG",
+        "country": "DE", "legal_form": "AG",
+        "lei": "LEI-DE-1234567890",
+    })
+    assert row is not None
+    assert row[5] is None                          # no nuts
+    assert row[6] == "AG"                          # legal_form as coarse sector
+    assert row[7]["lei"] == "LEI-DE-1234567890"
+
+
+def test_meta_drops_none_and_empty_values():
+    """`_compact_meta` shouldn't preserve None/empty entries — they'd
+    bloat the jsonb column without adding filter or display value."""
+    row = investment_fund({
+        "gmr_id": "f1", "name": "Test Fund", "country": "LU",
+        "fund_type": None, "lei": "", "legal_form": None,
+    })
+    assert row is not None
+    # All optionals None/empty -> meta itself becomes None
+    assert row[7] is None
+
+
+def test_contract_value_tier_boundaries():
+    """Boundary check on the tier bucketing."""
+    tests = [(50_000, "S"), (100_000, "M"), (999_999, "M"),
+             (1_000_000, "L"), (10_000_000, "XL")]
+    for value, expected in tests:
+        row = contract({
+            "ted_notice_id": f"T-{value}", "title": "x",
+            "country": "PT", "value_eur": value,
+        })
+        assert row is not None
+        assert row[7]["value_tier"] == expected, f"value={value}"

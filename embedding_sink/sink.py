@@ -62,7 +62,7 @@ class EmbeddingSink(EventConsumer):
 
         with LinguisticsClient(self._linguistics_url, backend=self._backend) as ling:
             # Pass 1: shape everything cheaply; keep skipped events out.
-            work: list[tuple] = []  # (ev, entity_type, entity_id, embed_text, country, event_date)
+            work: list[tuple] = []  # (ev, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta)
             for ev in batch:
                 composer = COMPOSERS.get(ev.event_type)
                 if composer is None:
@@ -72,8 +72,8 @@ class EmbeddingSink(EventConsumer):
                 if shaped is None:
                     skipped += 1
                     continue
-                entity_type, entity_id, embed_text, country, event_date = shaped
-                work.append((ev, entity_type, entity_id, embed_text, country, event_date))
+                entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = shaped
+                work.append((ev, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta))
 
             # Pass 2: batched embed. Chunks sized by EMBED_BATCH_SIZE and
             # dispatched in parallel through a small ThreadPoolExecutor
@@ -113,17 +113,23 @@ class EmbeddingSink(EventConsumer):
                 raise first_exc
 
             for i, w in enumerate(work):
-                _, entity_type, entity_id, embed_text, country, event_date = w
+                _, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = w
                 result = embed_results[i]
                 encoder_id = result["encoder_id"]
                 if encoder_id not in self._encoder_id_seen:
                     logger.info("using encoder_id=%s", encoder_id)
                     self._encoder_id_seen.add(encoder_id)
                 vector_lit = "[" + ",".join(f"{x:.6f}" for x in result["vector"]) + "]"
+                # psycopg serialises dicts to jsonb via Json adapter; import lazily to avoid
+                # touching psycopg types when meta is None everywhere.
+                from psycopg.types.json import Json  # pylint: disable=import-outside-toplevel
+                meta_col = Json(meta) if meta is not None else None
                 rows.append((
                     entity_type, entity_id, encoder_id, embed_text,
                     vector_lit, embed_text,  # embed_text also seeds name_lex
-                    country, event_date, w[0].seq,
+                    country, event_date,
+                    nuts, sector, meta_col,
+                    w[0].seq,
                 ))
 
         if not rows:
@@ -141,10 +147,14 @@ class EmbeddingSink(EventConsumer):
                     """
                     INSERT INTO search.entity_embeddings
                       (entity_type, entity_id, encoder_id, embed_text,
-                       embedding, name_lex, country, event_date, last_seq)
+                       embedding, name_lex, country, event_date,
+                       nuts, sector, meta,
+                       last_seq)
                     VALUES
                       (%s, %s, %s, %s,
-                       %s::vector, to_tsvector('simple', %s), %s, %s, %s)
+                       %s::vector, to_tsvector('simple', %s), %s, %s,
+                       %s, %s, %s,
+                       %s)
                     ON CONFLICT (entity_type, entity_id) DO UPDATE SET
                       encoder_id = EXCLUDED.encoder_id,
                       embed_text = EXCLUDED.embed_text,
@@ -152,6 +162,9 @@ class EmbeddingSink(EventConsumer):
                       name_lex   = EXCLUDED.name_lex,
                       country    = EXCLUDED.country,
                       event_date = EXCLUDED.event_date,
+                      nuts       = EXCLUDED.nuts,
+                      sector     = EXCLUDED.sector,
+                      meta       = EXCLUDED.meta,
                       last_seq   = EXCLUDED.last_seq,
                       updated_at = now()
                     """,

@@ -101,6 +101,26 @@ def authority(p: dict) -> Optional[Row]:
     )
 
 
+# value_tier boundaries mirror EU procurement thresholds (simplified,
+# sub-Directive, above-Directive, mega).
+_TIER_BOUNDS = ((100_000, "S"), (1_000_000, "M"), (10_000_000, "L"))
+
+
+def _value_tier(value_eur: object) -> Optional[str]:
+    """Map a contract's awarded value to an S/M/L/XL bucket. Returns None
+    for missing or unparseable values so the facet stays coarse."""
+    if value_eur is None:
+        return None
+    try:
+        v = float(value_eur)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    for upper, label in _TIER_BOUNDS:
+        if v < upper:
+            return label
+    return "XL"
+
+
 def contract(p: dict) -> Optional[Row]:
     """UpsertContract - title is the primary lexical hit; procurement
     contracts are pure "what is this contract about"."""
@@ -113,20 +133,10 @@ def contract(p: dict) -> Optional[Row]:
     # CPV taxonomy revisions.
     sector = str(cpv)[:2] if cpv else None
     value_eur = p.get("value_eur") or p.get("estimated_value_eur")
-    # value_tier boundaries mirror EU procurement thresholds (simplified,
-    # sub-Directive, above-Directive, mega).
-    tier = None
-    if value_eur is not None:
-        try:
-            v = float(value_eur)
-            tier = ("S" if v < 100_000 else "M" if v < 1_000_000
-                    else "L" if v < 10_000_000 else "XL")
-        except (TypeError, ValueError):
-            tier = None
     meta = _compact_meta(
         cpv=cpv,
         value_eur=value_eur,
-        value_tier=tier,
+        value_tier=_value_tier(value_eur),
         authority_id=p.get("authority_id"),
         company_gmr_id=p.get("company_gmr_id"),
         language=p.get("language"),

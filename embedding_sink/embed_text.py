@@ -154,7 +154,11 @@ def disclosure(p: dict) -> Optional[Row]:
     details = p.get("details") or {}
     # eu_cohesion payloads carry NUTS + theme + programme in `details`;
     # the ETL projects them there rather than as top-level fields.
-    nuts = details.get("nuts") if isinstance(details, dict) else None
+    # Kohesio + Transparency Register both key it as `nuts_code`; keep
+    # `nuts` as a legacy fallback in case an older loader path emits it.
+    nuts = None
+    if isinstance(details, dict):
+        nuts = details.get("nuts_code") or details.get("nuts")
     sector = None
     if isinstance(details, dict):
         # cohesion -> theme_code (fund/priority axis)

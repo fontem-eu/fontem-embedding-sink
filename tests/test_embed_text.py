@@ -171,18 +171,29 @@ def test_authority_projects_nuts_and_authority_type_as_sector():
 
 
 def test_disclosure_cohesion_pulls_nuts_from_details():
-    """eu_cohesion projects put NUTS + theme in payload.details."""
+    """eu_cohesion projects put NUTS + theme in payload.details. Kohesio
+    ships the key as `nuts_code`; the legacy `nuts` key is still accepted
+    so old loader test fixtures keep working."""
     row = disclosure({
         "system": "eu_cohesion", "disclosure_id": "COH-1",
         "title": "Rail electrification NUTS PT16",
         "filed_date": "2026-05-01",
-        "details": {"nuts": "PT16", "theme_code": "TO7", "country": "PT"},
+        "details": {"nuts_code": "PT16", "theme_code": "TO7", "country": "PT"},
     })
     assert row is not None
     assert row[0] == "cohesion"
     assert row[3] == "PT"    # country pulled from details
     assert row[5] == "PT16"
     assert row[6] == "TO7"
+
+    # legacy key still works
+    row_legacy = disclosure({
+        "system": "eu_cohesion", "disclosure_id": "COH-2",
+        "title": "Legacy fixture",
+        "details": {"nuts": "PT17"},
+    })
+    assert row_legacy is not None
+    assert row_legacy[5] == "PT17"
 
 
 def test_company_leaves_nuts_none_but_populates_meta():

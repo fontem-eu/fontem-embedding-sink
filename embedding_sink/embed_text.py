@@ -151,19 +151,13 @@ def disclosure(p: dict) -> Optional[Row]:
         return None
     system = p.get("system") or "disclosure"
     etype = system.replace("eu_", "").replace("-", "_")  # cohesion / lobbying
-    details = p.get("details") or {}
-    # eu_cohesion payloads carry NUTS + theme + programme in `details`;
-    # the ETL projects them there rather than as top-level fields.
-    # Kohesio + Transparency Register both key it as `nuts_code`; keep
-    # `nuts` as a legacy fallback in case an older loader path emits it.
-    nuts = None
-    if isinstance(details, dict):
-        nuts = details.get("nuts_code") or details.get("nuts")
-    sector = None
-    if isinstance(details, dict):
-        # cohesion -> theme_code (fund/priority axis)
-        # lobbying -> interest_area
-        sector = details.get("theme_code") or details.get("interest_area")
+    # Kohesio + Transparency Register both project NUTS + theme +
+    # programme into `details`. Kohesio keys it as `nuts_code`; keep
+    # `nuts` as a legacy fallback for older loader fixtures. sector
+    # is `theme_code` for cohesion, `interest_area` for lobbying.
+    details = p.get("details") if isinstance(p.get("details"), dict) else {}
+    nuts = details.get("nuts_code") or details.get("nuts")
+    sector = details.get("theme_code") or details.get("interest_area")
     meta = _compact_meta(
         system=system,
         disclosure_type=p.get("disclosure_type"),
@@ -174,7 +168,7 @@ def disclosure(p: dict) -> Optional[Row]:
         etype,
         p["disclosure_id"],
         _clean_join(title, system),
-        details.get("country") if isinstance(details, dict) else None,
+        details.get("country"),
         p.get("filed_date"),
         nuts,
         sector,

@@ -260,10 +260,43 @@ def investment_fund(p: dict) -> Optional[Row]:
     )
 
 
+def authority_translations(p: dict) -> Optional[Row]:
+    """TranslateAuthorityName -> fold the canonical name + its
+    translations into one embed_text so BOTH keyword search (name_lex
+    is seeded from embed_text) and semantic search (the vector) match
+    translated authority names, not just the original-language one.
+
+    The structured filter columns are returned as None on purpose: a
+    TranslateAuthorityName is a text-only enrichment, and the sink
+    routes it through a partial upsert that deliberately leaves
+    country/nuts/sector/meta untouched — those stay owned by
+    UpsertAuthority. Carrying `name` on the event keeps this stateless
+    (no read of the existing row) and order-independent on replay.
+    """
+    name = (p.get("name") or "").strip()
+    translations = p.get("translations") or {}
+    values = [
+        str(v).strip() for v in translations.values() if v and str(v).strip()
+    ]
+    if not name and not values:
+        return None
+    return (
+        "authority",
+        p["authority_id"],
+        _clean_join(name, *values),
+        None, None, None, None, None,
+    )
+
+
 # Event-type -> composer. Everything not listed here is skipped.
 # (Relationship / TaxonomyCode / Filing / Listing / ExchangeRate /
 # AssertSameAs / Begin/EndGraphReplace - not user-facing search
 # targets.)
+#
+# TranslateAuthorityName is embeddable but text-only: the sink
+# distinguishes it by event_type and applies a partial upsert (see
+# sink.py) so it enriches embed_text/name_lex/embedding without
+# blanking the authority's filter columns.
 COMPOSERS = {
     "UpsertCompany":         company,
     "UpsertAuthority":       authority,
@@ -272,4 +305,5 @@ COMPOSERS = {
     "UpsertSanctionedEntity": sanctioned_entity,
     "UpsertPetition":        petition,
     "UpsertInvestmentFund":  investment_fund,
+    "TranslateAuthorityName": authority_translations,
 }

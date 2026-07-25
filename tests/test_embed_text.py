@@ -5,7 +5,7 @@ None otherwise. The join must skip nan/none/null sentinels that show
 up in real GLEIF / TED / ESEF payloads.
 """
 from embedding_sink.embed_text import (
-    company, authority, contract, disclosure,
+    company, authority, authority_translations, contract, disclosure,
     sanctioned_entity, petition, investment_fund, COMPOSERS,
 )
 
@@ -62,6 +62,36 @@ def test_authority_composer():
     assert row is not None
     assert row[0] == "authority"
     assert "Bundeskanzleramt" in row[2]
+
+
+def test_authority_translations_folds_name_and_translations():
+    """TranslateAuthorityName -> embed_text carries the source name AND
+    every translation, so name_lex + vector match translated names."""
+    row = authority_translations({
+        "authority_id": "auth-7",
+        "name": "Kraśnickie Przedsiębiorstwo Wodociągów",
+        "source_lang": "pl",
+        "translations": {
+            "de": "Kraśnicker Wasserunternehmen",
+            "en": "Kraśnik Water Company",
+        },
+    })
+    assert row is not None
+    assert row[0] == "authority"
+    assert row[1] == "auth-7"
+    assert "Kraśnickie" in row[2]
+    assert "Wasserunternehmen" in row[2]
+    assert "Water Company" in row[2]
+    # text-only enrichment: filter columns are None (sink partial upsert
+    # leaves the authority's country/nuts/sector/meta untouched).
+    assert row[3] is None and row[5] is None and row[6] is None and row[7] is None
+
+
+def test_authority_translations_empty_is_skipped():
+    """No name and no translations -> nothing to embed."""
+    assert authority_translations({
+        "authority_id": "auth-8", "name": "", "translations": {},
+    }) is None
 
 
 def test_contract_uses_title_and_publication_date():
@@ -133,7 +163,10 @@ def test_composers_index_matches_module_functions():
     Guard against dangling entries after a rename."""
     for event_type, fn in COMPOSERS.items():
         assert callable(fn), f"{event_type} composer is not callable"
-        assert event_type.startswith("Upsert")
+        # Almost all embeddable events are Upsert*; TranslateAuthorityName
+        # is the one text-only enrichment event (routed to the partial
+        # upsert in the sink).
+        assert event_type.startswith("Upsert") or event_type == "TranslateAuthorityName"
 
 
 # ---------- advanced-filter fields (nuts, sector, meta jsonb) ----------

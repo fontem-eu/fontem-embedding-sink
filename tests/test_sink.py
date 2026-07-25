@@ -126,6 +126,42 @@ def _batch() -> list[EventEnvelope]:
     ]
 
 
+def test_translation_event_routes_to_partial_upsert(sink):
+    """A TranslateAuthorityName event is embedded (name + translations)
+    and written via a SEPARATE partial upsert whose SET clause omits the
+    filter columns, so it never blanks an authority's country/nuts/meta."""
+    instance, store = sink
+    batch = [
+        _envelope("UpsertAuthority",
+                  {"authority_id": "a-1", "name": "Urząd Miasta",
+                   "country": "PL", "nuts": "PL91"}, 20),
+        _envelope("TranslateAuthorityName",
+                  {"authority_id": "a-1", "name": "Urząd Miasta",
+                   "source_lang": "pl",
+                   "translations": {"de": "Stadtamt", "en": "City Office"}}, 21),
+    ]
+    instance.handle(batch)
+
+    # Two executemany calls: the full-column upsert, then the partial one.
+    assert len(store) == 2
+    full_sql, full_rows = store[0]
+    part_sql, part_rows = store[1]
+
+    # Full upsert carries the authority (all columns, incl. country/nuts).
+    assert "country" in full_sql and len(full_rows) == 1
+    assert full_rows[0][0:2] == ("authority", "a-1")
+
+    # Partial upsert: the translation row, and its SET clause must NOT
+    # touch country/nuts/sector/meta (those stay owned by UpsertAuthority).
+    assert len(part_rows) == 1
+    assert part_rows[0][0:2] == ("authority", "a-1")
+    set_clause = part_sql.split("DO UPDATE SET", 1)[1]
+    for col in ("country", "nuts", "sector", "meta"):
+        assert col not in set_clause, f"partial upsert must not SET {col}"
+    # The translated tokens made it into the embedded text (name_lex source).
+    assert "Stadtamt" in part_rows[0][3] and "City Office" in part_rows[0][3]
+
+
 def test_handle_writes_rows_with_encoder_id_and_counts_skips(sink, caplog):
     """2 embeddable + 2 skipped events → 2 rows, both stamped with the
     encoder_id the linguistics backend returned."""
@@ -148,7 +184,7 @@ def test_handle_writes_rows_with_encoder_id_and_counts_skips(sink, caplog):
     assert by_id[("company", "c-1")][11] == 10
 
     # Skips are counted and logged.
-    assert "2 embedded, 2 skipped" in caplog.text
+    assert "2 embedded" in caplog.text and "2 skipped" in caplog.text
 
 
 def test_handle_upserts_on_pk_for_replay_idempotency(sink):

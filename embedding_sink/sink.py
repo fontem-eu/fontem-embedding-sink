@@ -116,6 +116,13 @@ class EmbeddingSink(EventConsumer):
                 )
                 raise first_exc
 
+            # Full-column rows (Upsert* events own every column) go through
+            # the normal upsert. Text-only enrichment (TranslateAuthorityName)
+            # goes through a partial upsert that touches embed_text / vector /
+            # name_lex only, so it never blanks the authority's filter columns
+            # (country / nuts / sector / meta), which stay owned by
+            # UpsertAuthority.
+            text_only_rows: list[tuple] = []
             for i, w in enumerate(work):
                 _, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = w
                 result = embed_results[i]
@@ -124,6 +131,13 @@ class EmbeddingSink(EventConsumer):
                     logger.info("using encoder_id=%s", encoder_id)
                     self._encoder_id_seen.add(encoder_id)
                 vector_lit = "[" + ",".join(f"{x:.6f}" for x in result["vector"]) + "]"
+                if w[0].event_type == "TranslateAuthorityName":
+                    text_only_rows.append((
+                        entity_type, entity_id, encoder_id, embed_text,
+                        vector_lit, embed_text,  # embed_text also seeds name_lex
+                        w[0].seq,
+                    ))
+                    continue
                 # psycopg serialises dicts to jsonb via Json adapter; import lazily to avoid
                 # touching psycopg types when meta is None everywhere.
                 from psycopg.types.json import Json  # pylint: disable=import-outside-toplevel
@@ -136,7 +150,7 @@ class EmbeddingSink(EventConsumer):
                     w[0].seq,
                 ))
 
-        if not rows:
+        if not rows and not text_only_rows:
             if skipped:
                 logger.debug("batch of %d events, all skipped (non-embeddable)", skipped)
             return
@@ -145,37 +159,68 @@ class EmbeddingSink(EventConsumer):
         # per-batch UPSERT with executemany is simple and idempotent.
         # tsvector uses `simple` config for now — per-language analyzers
         # come in phase-two once the sink's stable.
+        #
+        # Full rows first, then text-only: if an authority and its
+        # translation land in the same batch, the full upsert seeds the
+        # row (name + context, all columns) and the partial upsert then
+        # folds the translations into the searchable text — order matters.
         with psycopg.connect(self._search_dsn) as conn:
             with conn.cursor() as cur:
-                cur.executemany(
-                    """
-                    INSERT INTO search.entity_embeddings
-                      (entity_type, entity_id, encoder_id, embed_text,
-                       embedding, name_lex, country, event_date,
-                       nuts, sector, meta,
-                       last_seq)
-                    VALUES
-                      (%s, %s, %s, %s,
-                       %s::vector, to_tsvector('simple', %s), %s, %s,
-                       %s, %s, %s,
-                       %s)
-                    ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-                      encoder_id = EXCLUDED.encoder_id,
-                      embed_text = EXCLUDED.embed_text,
-                      embedding  = EXCLUDED.embedding,
-                      name_lex   = EXCLUDED.name_lex,
-                      country    = EXCLUDED.country,
-                      event_date = EXCLUDED.event_date,
-                      nuts       = EXCLUDED.nuts,
-                      sector     = EXCLUDED.sector,
-                      meta       = EXCLUDED.meta,
-                      last_seq   = EXCLUDED.last_seq,
-                      updated_at = now()
-                    """,
-                    rows,
-                )
+                if rows:
+                    cur.executemany(
+                        """
+                        INSERT INTO search.entity_embeddings
+                          (entity_type, entity_id, encoder_id, embed_text,
+                           embedding, name_lex, country, event_date,
+                           nuts, sector, meta,
+                           last_seq)
+                        VALUES
+                          (%s, %s, %s, %s,
+                           %s::vector, to_tsvector('simple', %s), %s, %s,
+                           %s, %s, %s,
+                           %s)
+                        ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+                          encoder_id = EXCLUDED.encoder_id,
+                          embed_text = EXCLUDED.embed_text,
+                          embedding  = EXCLUDED.embedding,
+                          name_lex   = EXCLUDED.name_lex,
+                          country    = EXCLUDED.country,
+                          event_date = EXCLUDED.event_date,
+                          nuts       = EXCLUDED.nuts,
+                          sector     = EXCLUDED.sector,
+                          meta       = EXCLUDED.meta,
+                          last_seq   = EXCLUDED.last_seq,
+                          updated_at = now()
+                        """,
+                        rows,
+                    )
+                if text_only_rows:
+                    # Partial upsert: enrich the searchable text only.
+                    # country / event_date / nuts / sector / meta are
+                    # deliberately absent from the SET clause so a
+                    # translation never blanks them on an existing row
+                    # (and default to NULL on the rare insert-before-load).
+                    cur.executemany(
+                        """
+                        INSERT INTO search.entity_embeddings
+                          (entity_type, entity_id, encoder_id, embed_text,
+                           embedding, name_lex, last_seq)
+                        VALUES
+                          (%s, %s, %s, %s,
+                           %s::vector, to_tsvector('simple', %s), %s)
+                        ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+                          encoder_id = EXCLUDED.encoder_id,
+                          embed_text = EXCLUDED.embed_text,
+                          embedding  = EXCLUDED.embedding,
+                          name_lex   = EXCLUDED.name_lex,
+                          last_seq   = EXCLUDED.last_seq,
+                          updated_at = now()
+                        """,
+                        text_only_rows,
+                    )
 
         logger.info(
-            "batch: %d embedded, %d skipped (last_seq=%s)",
-            len(rows), skipped, batch[-1].seq,
+            "batch: %d embedded (%d full, %d translation), %d skipped (last_seq=%s)",
+            len(rows) + len(text_only_rows), len(rows), len(text_only_rows),
+            skipped, batch[-1].seq,
         )

@@ -1,3 +1,13 @@
+> ### 🪞 This GitHub repository is a mirror
+>
+> Development happens on Fontem's own infrastructure; this mirror is
+> updated automatically. **Issues and pull requests opened here are not
+> monitored.**
+>
+> If you would like to contribute — code, data sources, review, or
+> anything else — please get in touch at **team@fontem.eu** and we will
+> set you up.
+
 # fontem-embedding-sink
 
 Event consumer that projects `events.entity_events` into a
@@ -57,3 +67,7 @@ entity_id) and does NOT include `encoder_id` — two consumers running
 different backends clobber each other's rows. All consumers
 (embedding_sink, embedding_sink_b) must run the same
 EMBEDDING_BACKEND until the PK grows an encoder_id component.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).

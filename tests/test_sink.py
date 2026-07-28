@@ -126,10 +126,10 @@ def _batch() -> list[EventEnvelope]:
     ]
 
 
-def test_translation_event_routes_to_partial_upsert(sink):
-    """A TranslateAuthorityName event is embedded (name + translations)
-    and written via a SEPARATE partial upsert whose SET clause omits the
-    filter columns, so it never blanks an authority's country/nuts/meta."""
+def test_translation_event_writes_name_lex_i18n_only(sink):
+    """A TranslateAuthorityName event updates ONLY the name_lex_i18n lane
+    (translations), off the embed path — no linguistics call, no
+    embed_text/vector/name_lex write. Durable against entity re-loads."""
     instance, store = sink
     batch = [
         _envelope("UpsertAuthority",
@@ -142,24 +142,23 @@ def test_translation_event_routes_to_partial_upsert(sink):
     ]
     instance.handle(batch)
 
-    # Two executemany calls: the full-column upsert, then the partial one.
-    assert len(store) == 2
-    full_sql, full_rows = store[0]
-    part_sql, part_rows = store[1]
-
-    # Full upsert carries the authority (all columns, incl. country/nuts).
-    assert "country" in full_sql and len(full_rows) == 1
-    assert full_rows[0][0:2] == ("authority", "a-1")
-
-    # Partial upsert: the translation row, and its SET clause must NOT
-    # touch country/nuts/sector/meta (those stay owned by UpsertAuthority).
-    assert len(part_rows) == 1
-    assert part_rows[0][0:2] == ("authority", "a-1")
-    set_clause = part_sql.split("DO UPDATE SET", 1)[1]
-    for col in ("country", "nuts", "sector", "meta"):
-        assert col not in set_clause, f"partial upsert must not SET {col}"
-    # The translated tokens made it into the embedded text (name_lex source).
-    assert "Stadtamt" in part_rows[0][3] and "City Office" in part_rows[0][3]
+    # Two executemany calls: the i18n UPDATE (pre-pass) + the authority's
+    # full upsert. Neither the translation event embeds.
+    i18n = [(sql, rows) for sql, rows in store if "name_lex_i18n" in sql]
+    assert len(i18n) == 1, "translation must write name_lex_i18n exactly once"
+    sql, rows = i18n[0]
+    assert "UPDATE search.entity_embeddings" in sql
+    # SET only name_lex_i18n (+ updated_at) — nothing else touched
+    set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
+    for col in ("embed_text", "embedding", "name_lex ", "country", "nuts", "sector", "meta"):
+        assert col not in set_clause, f"i18n update must not touch {col}"
+    # params are (translations_text, authority_id)
+    text, aid = rows[0]
+    assert aid == "a-1"
+    assert "Stadtamt" in text and "City Office" in text
+    # linguistics embed_batch was called only for the 1 authority (not the translation)
+    assert len(FakeLinguistics.instances[-1].batch_calls) == 1
+    assert sum(len(c) for c in FakeLinguistics.instances[-1].batch_calls) == 1
 
 
 def test_handle_writes_rows_with_encoder_id_and_counts_skips(sink, caplog):

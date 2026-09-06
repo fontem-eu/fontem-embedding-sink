@@ -4,19 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fontem-events"
-version = "0.3.0"
+version = "0.6.0"
 description = "Runtime client lib for the fontem event log."
 requires-python = ">=3.11"
 authors = [{ name = "Fontem", email = "ops@void42.internal" }]
 license = { text = "Internal-only" }
 dependencies = [
     "psycopg[binary]>=3.3.4",
-    "prometheus-client>=0.21.1",
+    "prometheus-client>=0.26.0",
     "fontem-event-schemas>=0.1.0",
 ]
 
+[project.scripts]
+# Entry point for the etl-run-reaper CronJob.
+fontem-reap-runs = "fontem_events.reaper:main"
+
 [project.optional-dependencies]
-test = ["pytest>=9.0.3", "psycopg-pool"]
+test = ["pytest>=9.1.1", "psycopg-pool"]
 
 [tool.setuptools.packages.find]
 include = ["fontem_events*"]

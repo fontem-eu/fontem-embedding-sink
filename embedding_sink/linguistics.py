@@ -1,9 +1,11 @@
 """Blocking HTTP client for the /embed endpoint.
 
-The linguistics service is soft-required — 503 / timeout is retried by
-the EventConsumer's normal error handling, which will DLQ the batch
-after `max_attempts`. A whole batch failing isn't rare when linguistics
-is redeploying, so we prefer batch-level retry over per-event catch.
+The linguistics service is soft-required. 503 / timeout raises, and
+EmbeddingSink.is_retryable classifies those as the store being down:
+the offset holds and the batch replays intact once linguistics is
+back. Before that hook the batch was DLQ'd after `max_attempts` and
+the events were skipped for good, which is a poor trade for something
+as routine as a linguistics redeploy.
 """
 from __future__ import annotations
 

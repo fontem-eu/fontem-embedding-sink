@@ -23,6 +23,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+import httpx
 import psycopg
 from fontem_event_schemas import EventEnvelope
 from fontem_events import EventConsumer
@@ -48,6 +49,31 @@ class EmbeddingSink(EventConsumer):
         # visible in the logs (a change here means every subsequent row
         # in this run got a different encoder — start a re-embed job).
         self._encoder_id_seen: set[str] = set()
+
+    def is_retryable(self, exc: Exception) -> bool:
+        """Is this a store being unavailable rather than a bad event?
+
+        EventConsumer skips an event that fails max_attempts times in a
+        row. Right for bad data, catastrophic for an outage: nothing
+        re-emits a skipped event, so the row is simply never indexed
+        and search silently misses it forever. virtuoso_sink lost 4,006
+        events this way on 2026-09-06.
+
+        This sink depends on two stores that go away independently —
+        the linguistics service (httpx) and the search database
+        (psycopg) — and linguistics redeploys often enough that
+        linguistics.py used to describe losing a whole batch to it as
+        routine. Both are retried here.
+
+        A 4xx other than 429, or a psycopg ProgrammingError/DataError,
+        is the payload's fault and stays poison.
+        """
+        if isinstance(exc, (httpx.TransportError, httpx.StreamError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            code = exc.response.status_code
+            return code == 429 or 500 <= code < 600
+        return isinstance(exc, psycopg.OperationalError)
 
     def _apply_name_lex_i18n(self, rows: list[tuple]) -> None:
         """Update the translations-only lexical lane (name_lex_i18n) for

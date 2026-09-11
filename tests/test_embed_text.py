@@ -4,6 +4,9 @@ Composers must return a Row when the payload has a name/title, and
 None otherwise. The join must skip nan/none/null sentinels that show
 up in real GLEIF / TED / ESEF payloads.
 """
+import pytest
+
+from embedding_sink import embed_text
 from embedding_sink.embed_text import (
     company, authority, contract, disclosure,
     sanctioned_entity, petition, investment_fund, COMPOSERS,
@@ -233,3 +236,118 @@ def test_contract_value_tier_boundaries():
         })
         assert row is not None
         assert row[7]["value_tier"] == expected, f"value={value}"
+
+
+# ── parts: what a row is composed from, merged across events ──────────
+
+#: A payload stating every key its composer reads, per event type. The
+#: drift guard below composes from these, so a key a composer reads but
+#: PARTS does not declare shows up as a failure rather than as a field
+#: that silently disappears from search the next time a partial producer
+#: touches the row.
+_FULL_PAYLOADS = {
+    "UpsertCompany": {
+        "gmr_id": "c1", "name": "Siemens AG", "aliases": ["Siemens"],
+        "city": "Munchen", "country": "DEU", "legal_form": "AG", "lei": "L1",
+        "vat": "V1", "hq_country": "DEU", "registration_status": "ACTIVE",
+    },
+    "UpsertAuthority": {
+        "authority_id": "a1", "name": "Camara Municipal", "city": "Lisboa",
+        "country": "PRT", "authority_type": "MUNICIPALITY", "national_id": "N1",
+        "url": "https://example.test", "postal_code": "1000", "nuts": "PT17",
+    },
+    "UpsertContract": {
+        "ted_notice_id": "n1", "title": "Road works", "cpv": "45000000",
+        "value_eur": 1000, "estimated_value_eur": 900, "authority_id": "a1",
+        "company_gmr_id": "c1", "language": "EN", "country": "PRT",
+        "publication_date": "2026-05-01", "nuts": "PT17",
+    },
+    "UpsertDisclosure": {
+        "disclosure_id": "d1", "title": "Bridge renewal", "system": "eu_cohesion",
+        "details": {"nuts_code": "PT11", "theme_code": "01", "country": "PRT"},
+        "disclosure_type": "grant", "year": 2024, "filed_date": "2026-01-01",
+    },
+    "UpsertSanctionedEntity": {
+        "entity_id": "s1", "name": "Some Entity", "aliases": ["Alias"],
+        "eu_reference": "EU.1", "sanction_regime": "RU", "legal_basis": "Reg 1",
+        "listing_reason": "Reason", "subject_type": "entity",
+        "nationality": "RUS", "designation_date": "2026-01-01",
+    },
+    "UpsertPetition": {
+        "petition_id": "p1", "title": "Clean air", "objectives": ["o1", "o2"],
+        "organizer_countries": ["PRT"], "status": "OPEN", "total_supporters": 5,
+        "answered_date": "2026-02-01", "funding_total_eur": 10,
+        "registration_date": "2026-01-01",
+    },
+    "UpsertInvestmentFund": {
+        "gmr_id": "f1", "name": "A Fund", "lei": "L2", "legal_form": "SICAV",
+        "fund_type": "ETF", "country": "LUX",
+    },
+}
+
+
+class _Recording(dict):
+    """A payload that remembers every key the composer asked it for."""
+
+    def __init__(self, data):
+        super().__init__(data)
+        self.seen = set()
+
+    def get(self, key, default=None):
+        self.seen.add(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self.seen.add(key)
+        return super().__getitem__(key)
+
+
+@pytest.mark.parametrize("event_type", sorted(embed_text.COMPOSERS))
+def test_every_key_a_composer_reads_is_declared_in_parts(event_type):
+    """PARTS drives what the sink stores and merges. A key read but not
+    declared is dropped from `parts`, so the next partial event composes
+    without it — the exact regression this column exists to stop."""
+    payload = _Recording(_FULL_PAYLOADS[event_type])
+    assert embed_text.COMPOSERS[event_type](payload) is not None
+    undeclared = payload.seen - set(embed_text.PARTS[event_type])
+    assert not undeclared, f"{event_type} reads undeclared keys: {sorted(undeclared)}"
+
+
+@pytest.mark.parametrize("event_type", sorted(embed_text.COMPOSERS))
+def test_declared_parts_are_real_payload_keys(event_type):
+    """The other direction: a typo in PARTS would quietly never merge."""
+    unknown = set(embed_text.PARTS[event_type]) - set(_FULL_PAYLOADS[event_type])
+    assert not unknown, f"{event_type} declares keys no payload has: {sorted(unknown)}"
+
+
+def test_merge_keeps_what_the_event_does_not_state():
+    """The merge rule itself: stated wins, unstated survives."""
+    stored = {"gmr_id": "c1", "name": "Siemens AG", "city": "Munchen",
+              "legal_form": "AG"}
+    merged = embed_text.merge_parts(
+        "UpsertCompany", stored, {"gmr_id": "c1", "name": "SIEMENS AG", "country": "DEU"})
+    assert merged["name"] == "SIEMENS AG", "a stated value wins"
+    assert merged["country"] == "DEU", "a new field is added"
+    assert merged["city"] == "Munchen" and merged["legal_form"] == "AG"
+
+
+def test_a_null_is_not_a_statement():
+    """The Neo4j sink builds its SET map from non-null values only; this
+    store has to take the same fields from the same event."""
+    merged = embed_text.merge_parts(
+        "UpsertCompany", {"gmr_id": "c1", "city": "Munchen"},
+        {"gmr_id": "c1", "city": None})
+    assert merged["city"] == "Munchen"
+
+
+def test_merge_ignores_keys_no_composer_reads():
+    """Only the fields a row is composed from are stored — parts is not a
+    copy of the event."""
+    merged = embed_text.merge_parts(
+        "UpsertCompany", None, {"gmr_id": "c1", "name": "N", "postal_code": "1000"})
+    assert merged == {"gmr_id": "c1", "name": "N"}
+
+
+def test_an_unknown_event_type_merges_nothing():
+    """An event with no composer declares no parts, so it adds none."""
+    assert embed_text.merge_parts("UpsertWhatever", {"a": 1}, {"b": 2}) == {"a": 1}

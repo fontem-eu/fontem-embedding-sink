@@ -268,6 +268,64 @@ def investment_fund(p: dict) -> Optional[Row]:
 # TranslateAuthorityName is NOT here: it is handled off the embed path
 # entirely (see sink._apply_name_lex_i18n) — it writes only the
 # translations-only name_lex_i18n lane and never re-embeds.
+#: The payload keys each composer reads. The sink keeps the merged union
+#: of these per row (the `parts` column) so a later event stating only some
+#: of them enriches the row instead of rebuilding it from its own slice.
+#: tests/test_embed_text.py fails if a composer reads a key not listed here.
+PARTS: dict[str, tuple[str, ...]] = {
+    "UpsertCompany": (
+        "gmr_id", "name", "aliases", "city", "country", "legal_form",
+        "lei", "vat", "hq_country", "registration_status",
+    ),
+    "UpsertAuthority": (
+        "authority_id", "name", "city", "country", "authority_type",
+        "national_id", "url", "postal_code", "nuts",
+    ),
+    "UpsertContract": (
+        "ted_notice_id", "title", "cpv", "value_eur", "estimated_value_eur",
+        "authority_id", "company_gmr_id", "language", "country",
+        "publication_date", "nuts",
+    ),
+    "UpsertDisclosure": (
+        "disclosure_id", "title", "system", "details", "disclosure_type",
+        "year", "filed_date",
+    ),
+    "UpsertSanctionedEntity": (
+        "entity_id", "name", "aliases", "eu_reference", "sanction_regime",
+        "legal_basis", "listing_reason", "subject_type", "nationality",
+        "designation_date",
+    ),
+    "UpsertPetition": (
+        "petition_id", "title", "objectives", "organizer_countries", "status",
+        "total_supporters", "answered_date", "funding_total_eur",
+        "registration_date",
+    ),
+    "UpsertInvestmentFund": (
+        "gmr_id", "name", "lei", "legal_form", "fund_type", "country",
+    ),
+}
+
+
+def merge_parts(event_type: str, stored: "dict | None", payload: dict) -> dict:
+    """Fold one event's payload into the fields its row is composed from.
+
+    A stated value wins; a key that is absent -- or explicitly null -- keeps
+    what the row already had. That is the rule Neo4j applies when it builds
+    a node's SET map and the one the Virtuoso sink applies to a partial
+    UpsertCompany, so all three stores now take the same fields from the
+    same event.
+
+    Without it every producer rebuilt the row from its own slice of the
+    entity. load_ted_contracts states a supplier's name and country as one
+    notice spells them, so a company GLEIF had described with its city,
+    aliases and legal form came back as "name - country": a thinner search
+    text, and a vector to match, until a full record happened to arrive.
+    """
+    fresh = {k: payload[k] for k in PARTS.get(event_type) or ()
+             if payload.get(k) is not None}
+    return {**(stored or {}), **fresh}
+
+
 COMPOSERS = {
     "UpsertCompany":         company,
     "UpsertAuthority":       authority,

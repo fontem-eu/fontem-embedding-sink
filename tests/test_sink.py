@@ -41,10 +41,17 @@ class FakeLinguistics:
 
 
 class FakeCursor:
-    """Records executemany(sql, rows) into the shared store."""
+    """Records executemany(sql, rows) into the shared store, and answers the
+    sink's "what does the index already hold" SELECT from `stored_rows`."""
+
+    #: (entity_type, entity_id) -> (parts, embed_text, encoder_id). Set by a
+    #: test; empty means every row in the batch is new to the index.
+    stored_rows: dict = {}
+    selects: list = []
 
     def __init__(self, store):
         self._store = store
+        self._rows: list = []
 
     def __enter__(self):
         return self
@@ -55,6 +62,19 @@ class FakeCursor:
     def executemany(self, sql, rows):
         """Capture the statement and its rows."""
         self._store.append((sql, list(rows)))
+
+    def execute(self, sql, params=None):
+        """Answer the stored-rows lookup. Kept out of the write store so a
+        test still reads writes by position."""
+        FakeCursor.selects.append((sql, params))
+        types, ids = params if params else ([], [])
+        self._rows = [(t, i, *FakeCursor.stored_rows[(t, i)])
+                      for t, i in zip(types, ids)
+                      if (t, i) in FakeCursor.stored_rows]
+
+    def fetchall(self):
+        """Rows for the last execute()."""
+        return self._rows
 
 
 class FakeConn:
@@ -99,6 +119,8 @@ def _sink(monkeypatch):
     monkeypatch.delenv("EMBED_BATCH_SIZE", raising=False)
 
     FakeLinguistics.instances = []
+    FakeCursor.stored_rows = {}
+    FakeCursor.selects = []
     monkeypatch.setattr(sink_mod, "LinguisticsClient", FakeLinguistics)
 
     store: list = []
@@ -179,8 +201,8 @@ def test_handle_writes_rows_with_encoder_id_and_counts_skips(sink, caplog):
         assert row[2] == ENCODER                      # encoder_id column
         assert row[4] == "[0.100000,0.200000]"        # vector literal
     assert by_id[("contract", "n-1")][7] == "2026-05-01"  # event_date
-    # cols [8..10] = nuts, sector, meta; last_seq moved to [11]
-    assert by_id[("company", "c-1")][11] == 10
+    # cols [8..11] = nuts, sector, meta, parts; last_seq last
+    assert by_id[("company", "c-1")][12] == 10
 
     # Skips are counted and logged.
     assert "2 embedded" in caplog.text and "2 skipped" in caplog.text
@@ -197,7 +219,10 @@ def test_handle_upserts_on_pk_for_replay_idempotency(sink):
     for sql, _rows in store:
         assert "ON CONFLICT (entity_type, entity_id) DO UPDATE" in sql
     # Identical rows both times → replay converges to the same state.
-    assert store[0][1] == store[1][1]
+    # parts rides as a psycopg Json wrapper, which compares by identity.
+    def _plain(rows):
+        return [tuple(c.obj if hasattr(c, "obj") else c for c in r) for r in rows]
+    assert _plain(store[0][1]) == _plain(store[1][1])
 
 
 def test_handle_all_skipped_batch_never_touches_db(sink):
@@ -223,3 +248,82 @@ def test_handle_chunks_by_embed_batch_size(sink, monkeypatch):
     ling = FakeLinguistics.instances[-1]
     assert [len(c) for c in ling.batch_calls] == [1, 1, 1]
     assert len(store[0][1]) == 3
+
+
+def test_a_partial_event_keeps_the_context_the_row_already_had(sink):
+    """The bug this column exists for. load_ted_contracts states a
+    supplier's name and country as one notice spells them; composing the
+    row from that slice alone dropped the city, aliases and legal form
+    GLEIF had given it, and the vector with them."""
+    instance, store = sink
+    FakeCursor.stored_rows[("company", "c-9")] = (
+        {"gmr_id": "c-9", "name": "Siemens AG", "aliases": ["Siemens"],
+         "city": "Munchen", "country": "DEU", "legal_form": "AG", "lei": "L1"},
+        "Siemens AG — Siemens — Munchen — DEU — AG", ENCODER,
+    )
+    instance.handle([_envelope(
+        "UpsertCompany",
+        {"gmr_id": "c-9", "name": "SIEMENS AKTIENGESELLSCHAFT", "country": "DEU"},
+        40)])
+
+    _sql, rows = store[0]
+    text = rows[0][3]
+    assert "SIEMENS AKTIENGESELLSCHAFT" in text, "a stated value must win"
+    for kept in ("Munchen", "AG", "Siemens"):
+        assert kept in text, f"{kept} was dropped by a partial event"
+    parts = rows[0][11].obj
+    assert parts["name"] == "SIEMENS AKTIENGESELLSCHAFT"
+    assert parts["city"] == "Munchen" and parts["lei"] == "L1"
+
+
+def test_a_null_in_the_event_does_not_erase_a_stored_field(sink):
+    """Absent and null are both "not stated" — the rule the Neo4j sink
+    applies when it builds a node's SET map."""
+    instance, store = sink
+    FakeCursor.stored_rows[("company", "c-7")] = (
+        {"gmr_id": "c-7", "name": "Acme SA", "city": "Lisboa", "country": "PRT"},
+        "Acme SA — Lisboa — PRT", ENCODER,
+    )
+    instance.handle([_envelope(
+        "UpsertCompany",
+        {"gmr_id": "c-7", "name": "Acme SA", "city": None, "country": "PRT"}, 41)])
+    assert store[0][1][0][11].obj["city"] == "Lisboa"
+
+
+def test_an_unchanged_row_keeps_its_vector(sink):
+    """Re-stating a record composes the text the row already has. Embedding
+    it again costs a linguistics turn per row and changes nothing — and the
+    repair backfills re-state whole records by the million."""
+    instance, store = sink
+    payload = {"gmr_id": "c-8", "name": "Acme SA", "country": "FRA"}
+    instance.handle([_envelope("UpsertCompany", payload, 42)])  # learns the encoder
+    text = store[0][1][0][3]
+
+    FakeCursor.stored_rows[("company", "c-8")] = (dict(payload), text, ENCODER)
+    store.clear()
+    instance.handle([_envelope("UpsertCompany", payload, 43)])
+
+    assert FakeLinguistics.instances[-1].batch_calls == [], "must not re-embed"
+    assert len(store) == 1
+    sql, rows = store[0]
+    assert sql.strip().startswith("UPDATE")
+    set_clause = sql.split("SET", 1)[1].split("WHERE", 1)[0]
+    for untouched in ("embedding", "embed_text", "name_lex"):
+        assert untouched not in set_clause, \
+            f"an unchanged row must not rewrite {untouched}"
+    assert rows[0][6] == 43                       # last_seq still advances
+    assert rows[0][7:] == ("company", "c-8")
+
+
+def test_a_different_encoder_re_embeds_even_unchanged_text(sink):
+    """A re-embed pass (EMBEDDING_BACKEND flipped) must not be skipped by
+    the unchanged check: same text, different model, new vector."""
+    instance, store = sink
+    payload = {"gmr_id": "c-6", "name": "Acme SA", "country": "FRA"}
+    instance.handle([_envelope("UpsertCompany", payload, 44)])
+    text = store[0][1][0][3]
+    FakeCursor.stored_rows[("company", "c-6")] = (dict(payload), text, "labse@old")
+    store.clear()
+    instance.handle([_envelope("UpsertCompany", payload, 45)])
+    assert FakeLinguistics.instances[-1].batch_calls == [[text]]
+    assert "INSERT INTO search.entity_embeddings" in store[0][0]

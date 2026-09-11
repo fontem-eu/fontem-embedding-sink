@@ -28,7 +28,7 @@ import psycopg
 from fontem_event_schemas import EventEnvelope
 from fontem_events import EventConsumer
 
-from .embed_text import COMPOSERS
+from .embed_text import COMPOSERS, merge_parts
 from .linguistics import LinguisticsClient
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,10 @@ class EmbeddingSink(EventConsumer):
         # visible in the logs (a change here means every subsequent row
         # in this run got a different encoder — start a re-embed job).
         self._encoder_id_seen: set[str] = set()
+        #: The encoder the last embed in this run used. A row already
+        #: carrying it, whose text is unchanged, does not need re-embedding;
+        #: a row carrying a different one does (that is a re-embed pass).
+        self._encoder_id: "str | None" = None
 
     def is_retryable(self, exc: Exception) -> bool:
         """Is this a store being unavailable rather than a bad event?
@@ -95,6 +99,28 @@ class EmbeddingSink(EventConsumer):
                 )
         logger.info("i18n: name_lex_i18n updated for %d authorities", len(rows))
 
+    def _stored_rows(self, keys: set) -> dict:
+        """What the index already holds for these rows: (parts, embed_text,
+        encoder_id), keyed by (entity_type, entity_id). Absent rows are
+        simply missing from the mapping."""
+        if not keys:
+            return {}
+        types = [k[0] for k in keys]
+        ids = [k[1] for k in keys]
+        with psycopg.connect(self._search_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT entity_type, entity_id, parts, embed_text, encoder_id
+                      FROM search.entity_embeddings
+                     WHERE (entity_type, entity_id) IN (
+                               SELECT * FROM unnest(%s::text[], %s::text[]))
+                    """,
+                    (types, ids),
+                )
+                return {(r[0], r[1]): (r[2] or {}, r[3], r[4])
+                        for r in cur.fetchall()}
+
     def handle(self, batch: list[EventEnvelope]) -> None:
         # One long, linear batch pipeline — kept inline on purpose.
         # pylint: disable=too-many-locals,too-many-branches,too-many-statements
@@ -127,8 +153,10 @@ class EmbeddingSink(EventConsumer):
 
         with LinguisticsClient(self._linguistics_url, backend=self._backend) as ling:
             # Pass 1: shape everything cheaply; keep skipped events out.
-            # (ev, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta)
-            work: list[tuple] = []
+            # Composing the raw payload here is what names the row: a
+            # disclosure's entity_type comes out of its own payload, so the
+            # identity cannot be looked up from the event type alone.
+            shaped_work: list[tuple] = []
             for ev in batch:
                 composer = COMPOSERS.get(ev.event_type)
                 if composer is None:
@@ -138,11 +166,38 @@ class EmbeddingSink(EventConsumer):
                 if shaped is None:
                     skipped += 1
                     continue
-                entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = shaped
-                work.append((
-                    ev, entity_type, entity_id, embed_text, country, event_date,
-                    nuts, sector, meta,
-                ))
+                shaped_work.append((ev, composer, shaped))
+
+            # Pass 1b: fold each event into the fields its row is already
+            # composed from, then recompose. An Upsert states a slice of the
+            # entity -- load_ted_contracts sends a supplier's name and country
+            # -- and composing from the slice alone rebuilt the row without
+            # the city, aliases and legal form GLEIF had given it: a thinner
+            # search text and a thinner vector, on a row nothing repairs until
+            # a full record happens to arrive.
+            #
+            # A row whose merged text is unchanged keeps its vector. Re-embedding
+            # identical text costs a linguistics turn per row and changes
+            # nothing; the repair backfills re-state whole records, so most of
+            # what they touch composes to exactly what is already stored.
+            # (ev, entity_type, entity_id, embed_text, country,
+            #  event_date, nuts, sector, meta, parts)
+            stored = self._stored_rows({(s[2][0], s[2][1]) for s in shaped_work})
+            work: list[tuple] = []
+            unchanged: list[tuple] = []
+            for ev, composer, shaped in shaped_work:
+                prev = stored.get((shaped[0], shaped[1]))
+                parts = merge_parts(ev.event_type, prev[0] if prev else None, ev.payload)
+                entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = (
+                    composer(parts) or shaped
+                )
+                item = (ev, entity_type, entity_id, embed_text, country, event_date,
+                        nuts, sector, meta, parts)
+                if prev is not None and prev[1] == embed_text \
+                        and prev[2] == self._encoder_id:
+                    unchanged.append(item)
+                else:
+                    work.append(item)
 
             # Pass 2: batched embed. Chunks sized by EMBED_BATCH_SIZE and
             # dispatched in parallel through a small ThreadPoolExecutor
@@ -182,12 +237,14 @@ class EmbeddingSink(EventConsumer):
                 raise first_exc
 
             for i, w in enumerate(work):
-                _, entity_type, entity_id, embed_text, country, event_date, nuts, sector, meta = w
+                (_, entity_type, entity_id, embed_text, country, event_date,
+                 nuts, sector, meta, parts) = w
                 result = embed_results[i]
                 encoder_id = result["encoder_id"]
                 if encoder_id not in self._encoder_id_seen:
                     logger.info("using encoder_id=%s", encoder_id)
                     self._encoder_id_seen.add(encoder_id)
+                self._encoder_id = encoder_id
                 vector_lit = "[" + ",".join(f"{x:.6f}" for x in result["vector"]) + "]"
                 # psycopg serialises dicts to jsonb via Json adapter; import lazily to avoid
                 # touching psycopg types when meta is None everywhere.
@@ -197,11 +254,24 @@ class EmbeddingSink(EventConsumer):
                     entity_type, entity_id, encoder_id, embed_text,
                     vector_lit, embed_text,  # embed_text also seeds name_lex
                     country, event_date,
-                    nuts, sector, meta_col,
+                    nuts, sector, meta_col, Json(parts),
                     w[0].seq,
                 ))
 
-        if not rows:
+        # Rows whose text did not move: keep vector, embed_text and name_lex,
+        # refresh the fields an event can still change.
+        touch: list[tuple] = []
+        if unchanged:
+            from psycopg.types.json import Json  # pylint: disable=import-outside-toplevel
+            for (ev, entity_type, entity_id, _text, country, event_date,
+                 nuts, sector, meta, parts) in unchanged:
+                touch.append((
+                    country, event_date, nuts, sector,
+                    Json(meta) if meta is not None else None, Json(parts),
+                    ev.seq, entity_type, entity_id,
+                ))
+
+        if not rows and not touch:
             if skipped:
                 logger.debug("batch of %d events, all skipped (non-embeddable)", skipped)
             return
@@ -212,17 +282,18 @@ class EmbeddingSink(EventConsumer):
         # come in phase-two once the sink's stable.
         with psycopg.connect(self._search_dsn) as conn:
             with conn.cursor() as cur:
-                cur.executemany(
+                if rows:
+                    cur.executemany(
                         """
                         INSERT INTO search.entity_embeddings
                           (entity_type, entity_id, encoder_id, embed_text,
                            embedding, name_lex, country, event_date,
-                           nuts, sector, meta,
+                           nuts, sector, meta, parts,
                            last_seq)
                         VALUES
                           (%s, %s, %s, %s,
                            %s::vector, to_tsvector('simple', %s), %s, %s,
-                           %s, %s, %s,
+                           %s, %s, %s, %s,
                            %s)
                         ON CONFLICT (entity_type, entity_id) DO UPDATE SET
                           encoder_id = EXCLUDED.encoder_id,
@@ -234,12 +305,25 @@ class EmbeddingSink(EventConsumer):
                           nuts       = EXCLUDED.nuts,
                           sector     = EXCLUDED.sector,
                           meta       = EXCLUDED.meta,
+                          parts      = EXCLUDED.parts,
                           last_seq   = EXCLUDED.last_seq,
                           updated_at = now()
                         """,
                         rows,
                     )
+                if touch:
+                    cur.executemany(
+                        """
+                        UPDATE search.entity_embeddings
+                           SET country = %s, event_date = %s, nuts = %s,
+                               sector = %s, meta = %s, parts = %s,
+                               last_seq = %s, updated_at = now()
+                         WHERE entity_type = %s AND entity_id = %s
+                        """,
+                        touch,
+                    )
         logger.info(
-            "batch: %d embedded, %d skipped (last_seq=%s)",
-            len(rows), skipped, batch[-1].seq,
+            "batch: %d embedded, %d unchanged (vector kept), %d skipped "
+            "(last_seq=%s)",
+            len(rows), len(touch), skipped, batch[-1].seq,
         )

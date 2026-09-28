@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fontem-events"
-version = "0.6.0"
+version = "0.7.1"
 description = "Runtime client lib for the fontem event log."
 requires-python = ">=3.11"
 authors = [{ name = "Fontem", email = "ops@void42.internal" }]
 license = { text = "Internal-only" }
 dependencies = [
-    "psycopg[binary]>=3.3.4",
+    "psycopg[binary]>=3.3.5",
     "prometheus-client>=0.26.0",
     "fontem-event-schemas>=0.1.0",
 ]

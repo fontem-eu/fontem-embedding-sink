@@ -94,6 +94,23 @@ def test_disclosure_maps_system_to_entity_type():
     assert row[0] == "lobbying"
 
 
+def test_a_registrants_long_texts_stay_out_of_its_search_row():
+    """The Transparency Register's free texts run to thousands of
+    characters and its client lists to hundreds of names; a search row's
+    meta goes out with every hit. The short facts stay."""
+    row = disclosure({
+        "system": "eu-lobbying", "disclosure_id": "9218245390-27",
+        "title": "Beispiel Brauer-Bund e.V.",
+        "details": {"goals": "Die Interessen der Brauwirtschaft vertreten. " * 40,
+                    "country": "GERMANY", "category": "Trade and business associations",
+                    "cost_max": 24999, "active": True, "interests": ["Taxation"],
+                    "client_names": [f"Client {i}" for i in range(200)]},
+    })
+    assert row[7]["details"] == {"country": "GERMANY",
+                                 "category": "Trade and business associations",
+                                 "cost_max": 24999, "active": True, "interests": ["Taxation"]}
+
+
 def test_sanctioned_entity_composer():
     """Aliases, nationality and designation_date survive into the row."""
     row = sanctioned_entity({

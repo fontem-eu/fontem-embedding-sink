@@ -99,11 +99,13 @@ jobs:
           minimal-enforce: "true"
 
       # Sinks aren't deployed via a Helm chart — their Deployment lives
-      # inline in gitops/infra/{staging,prod}.yaml as a literal image
+      # inline in gitops/infra/{shared,prod}.yaml as a literal image
       # tag. We can't reuse the gitops-bump action (which expects
       # <env>/<service>.yaml with a `version:` field). Bump the literal
-      # `image:` line directly in infra/staging.yaml for the testing+staging
-      # envs that consume the same manifest.
+      # `image:` line in infra/shared.yaml, the fontem-shared deployment
+      # testing and staging read. (It moved there from infra/staging.yaml;
+      # until 2026-10-09 this step still edited staging.yaml, so every
+      # bump was a silent no-op and shared stayed on ve952199.)
       - name: Bump image tag in gitops infra
         env:
           TAG: ${{ steps.image.outputs.tag }}
@@ -117,13 +119,15 @@ jobs:
             "https://${{ secrets.REGISTRY_USER }}:${{ secrets.REGISTRY_PASSWORD }}@contribute.void42.internal/fontem/gitops.git" \
             /tmp/gitops
           cd /tmp/gitops
-          # Only auto-bump non-prod (testing/staging share infra/staging.yaml).
-          # Prod stays manual; the user bumps infra/prod.yaml when ready.
+          # Only auto-bump fontem-shared. Prod stays manual (infra/prod.yaml).
+          # No `|| true`: an image line that is not there must fail the job,
+          # not pass as a no-op.
+          grep -q "image: contribute.void42.internal/fontem/fontem-embedding-sink:" infra/shared.yaml
           sed -i -E "s|(image: contribute\.void42\.internal/fontem/fontem-embedding-sink:)[^\"[:space:]]+|\1${TAG}|" \
-            infra/staging.yaml || true
+            infra/shared.yaml
           git config user.name "Fontem CI"
           git config user.email "ci@void42.internal"
-          git add infra/staging.yaml
+          git add infra/shared.yaml
           git diff --cached --quiet && { echo "No-op bump (already at $TAG)"; exit 0; }
-          git commit -m "ci: deploy fontem-embedding-sink ${TAG} to testing+staging [skip ci]"
+          git commit -m "ci: deploy fontem-embedding-sink ${TAG} to fontem-shared [skip ci]"
           git push origin main

@@ -108,17 +108,36 @@ def test_sanctioned_entity_composer():
     assert row[4] == "2026-01-15"
 
 
-def test_petition_composer():
-    """Title plus at most three objectives make up the petition text."""
+OBJECTIVES = ("Require publishers that sell or license videogames to consumers in the "
+              "European Union to leave said videogames in a working (playable) state.\n"
+              "• Prevent the remote disabling of videogames by the publishers")
+
+
+def test_a_petition_is_found_by_what_it_asks_for():
+    """Regression: UpsertPetition.objectives is one text, and the composer
+    read it as a list, taking its first three characters ("Req") for three
+    objectives. Every petition was embedded as little more than its title,
+    so a search for what an initiative asks for could not find it."""
     row = petition({
-        "petition_id": "p1", "title": "Ban PFAS",
-        "objectives": ["obj a", "obj b", "obj c", "obj d skipped"],
-        "registration_date": "2026-06-01",
+        "petition_id": "ECI(2024)000007", "title": "Stop Destroying Videogames",
+        "objectives": OBJECTIVES, "organizer_countries": ["", "", "de"],
+        "registration_date": "2024-06-19",
     })
     assert row is not None
-    # First 3 objectives make it in; 4th is truncated.
-    assert "obj a" in row[2] and "obj b" in row[2] and "obj c" in row[2]
-    assert "obj d" not in row[2]
+    assert row[2] == ("Stop Destroying Videogames — Require publishers that sell or license "
+                      "videogames to consumers in the European Union to leave said videogames "
+                      "in a working (playable) state. • Prevent the remote disabling of "
+                      "videogames by the publishers")
+
+
+def test_a_petition_is_placed_where_its_representative_lives():
+    """Most organisers carry no country upstream (an empty string): the
+    representative's is the one the register states."""
+    p = {"petition_id": "p1", "title": "Clean air", "objectives": "Cleaner air.",
+         "organizer_countries": ["", "", "pt"]}
+    assert petition({**p, "representative_country": "de"})[3] == "de"
+    assert petition(p)[3] == "pt"
+    assert petition({**p, "organizer_countries": ["", ""]})[3] is None
 
 
 def test_investment_fund_composer():
@@ -274,8 +293,9 @@ _FULL_PAYLOADS = {
         "nationality": "RUS", "designation_date": "2026-01-01",
     },
     "UpsertPetition": {
-        "petition_id": "p1", "title": "Clean air", "objectives": ["o1", "o2"],
-        "organizer_countries": ["PRT"], "status": "OPEN", "total_supporters": 5,
+        "petition_id": "p1", "title": "Clean air", "objectives": "Cleaner air in cities.",
+        "organizer_countries": ["PRT"],
+        "representative_country": "pt", "status": "OPEN", "total_supporters": 5,
         "answered_date": "2026-02-01", "funding_total_eur": 10,
         "registration_date": "2026-01-01",
     },

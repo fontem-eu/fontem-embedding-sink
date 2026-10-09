@@ -212,24 +212,26 @@ def sanctioned_entity(p: dict) -> Optional[Row]:
 
 
 def petition(p: dict) -> Optional[Row]:
-    """UpsertPetition -> title + first three objectives."""
+    """UpsertPetition -> title + its objectives (one text, in full).
+
+    Placed where the organisers' representative lives: most organisers
+    carry no country upstream, and their entries are empty strings."""
     title = (p.get("title") or "").strip()
     if not title:
         return None
-    ctx = _clean_join(*(p.get("objectives") or [])[:3])
     orgs = p.get("organizer_countries") or []
-    country = orgs[0] if orgs else None
+    country = p.get("representative_country") or next((c for c in orgs if c), None)
     meta = _compact_meta(
         status=p.get("status"),
         total_supporters=p.get("total_supporters"),
         answered_date=p.get("answered_date"),
-        organizer_countries=orgs or None,
+        organizer_countries=[c for c in orgs if c] or None,
         funding_total_eur=p.get("funding_total_eur"),
     )
     return (
         "petition",
         p["petition_id"],
-        _clean_join(title, ctx),
+        _clean_join(title, p.get("objectives")),
         country,
         p.get("registration_date"),
         None,
@@ -296,7 +298,8 @@ PARTS: dict[str, tuple[str, ...]] = {
         "designation_date",
     ),
     "UpsertPetition": (
-        "petition_id", "title", "objectives", "organizer_countries", "status",
+        "petition_id", "title", "objectives", "organizer_countries",
+        "representative_country", "status",
         "total_supporters", "answered_date", "funding_total_eur",
         "registration_date",
     ),

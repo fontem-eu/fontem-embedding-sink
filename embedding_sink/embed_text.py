@@ -153,6 +153,23 @@ def contract(p: dict) -> Optional[Row]:
     )
 
 
+#: What of a disclosure's details a search row keeps: short facts. The
+#: Transparency Register's free texts (goals, legislative proposals, ...)
+#: and long lists (clients, contributors) belong on the entity's page; the
+#: row's meta goes out with every search hit.
+_META_TEXT_MAX = 200
+_META_LIST_MAX = 20
+
+
+def _search_details(details: dict) -> dict:
+    def short(v) -> bool:
+        return (isinstance(v, (int, float, bool))
+                or (isinstance(v, str) and len(v) <= _META_TEXT_MAX))
+    return {k: v for k, v in details.items()
+            if short(v) or (isinstance(v, list) and len(v) <= _META_LIST_MAX
+                            and all(short(x) for x in v))}
+
+
 def disclosure(p: dict) -> Optional[Row]:
     """UpsertDisclosure - covers eu_cohesion projects and eu_lobbying
     filings. Title carries the semantic weight."""
@@ -172,7 +189,7 @@ def disclosure(p: dict) -> Optional[Row]:
         system=system,
         disclosure_type=p.get("disclosure_type"),
         year=p.get("year"),
-        details=details or None,
+        details=_search_details(details) or None,
     )
     return (
         etype,
